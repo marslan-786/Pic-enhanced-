@@ -1,14 +1,11 @@
-opencv-python-headless==4.8.0.74
 fastapi
 uvicorn
+python-multipart
 requests
-pillow
-numpy
-torch
-torchvision
-gfpgan
-realesrgan
+Pillow
+torch --index-url https://download.pytorch.org/whl/cpu
 diffusers
 transformers
 accelerate
 scipy
+safetensors
