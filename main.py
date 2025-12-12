@@ -1,94 +1,89 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 import requests
 import io
 from PIL import Image
+import numpy as np
+import cv2
+from gfpgan import GFPGANer
+from realesrgan import RealESRGANer
+from basicsr.archs.rrdbnet_arch import RRDBNet
 import torch
 import gc
 
 app = FastAPI()
 
-# Global Variable for the Heavy Model
-upscaler_pipe = None
+# Global Models
+face_enhancer = None
+bg_enhancer = None
 
-# --------------------------------------------
-# LAZY LOAD: Stable Diffusion x4 Upscaler
-# --------------------------------------------
-def get_upscaler_model():
-    global upscaler_pipe
-    # Import inside function to avoid startup timeout
-    from diffusers import StableDiffusionUpscalePipeline
+def load_models():
+    global face_enhancer, bg_enhancer
     
-    if upscaler_pipe is None:
-        print("🚀 Loading Heavy Stable Diffusion Upscaler (VIP Mode)...")
+    if face_enhancer is None:
+        print("💎 Loading Models (This creates the Magic)...")
         
-        # Load the model directly to CPU (since we have 32GB RAM + 32 vCPU)
-        upscaler_pipe = StableDiffusionUpscalePipeline.from_pretrained(
-            "stabilityai/stable-diffusion-x4-upscaler", 
-            torch_dtype=torch.float32
+        # 1. Load Background Enhancer (RealESRGAN)
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
+        bg_enhancer = RealESRGANer(
+            scale=2,
+            model_path='https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth',
+            model=model,
+            tile=400,
+            tile_pad=10,
+            pre_pad=0,
+            half=False # CPU mode
         )
-        upscaler_pipe = upscaler_pipe.to("cpu")
-        
-        # Memory Optimization (Optional since you have 32GB)
-        # upscaler_pipe.enable_attention_slicing()
-        
-    return upscaler_pipe
 
-# --------------------------------------------
-# DOWNLOAD HELPER
-# --------------------------------------------
-def download_image(url):
-    try:
-        content = requests.get(url, timeout=10).content
-        image = Image.open(io.BytesIO(content)).convert("RGB")
-        return image
-    except:
-        raise HTTPException(400, "Invalid image URL")
+        # 2. Load Face Enhancer (GFPGAN - The Remini Logic)
+        face_enhancer = GFPGANer(
+            model_path='https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth',
+            upscale=2,
+            arch='clean',
+            channel_multiplier=2,
+            bg_upsampler=bg_enhancer # Link background enhancer here
+        )
+        print("✅ Models Loaded Successfully!")
 
-# --------------------------------------------
-# MAIN API
-# --------------------------------------------
+    return face_enhancer
+
 @app.get("/enhance")
-def enhance(url: str, prompt: str = "high quality, 8k, ultra realistic, sharp focus"):
+def enhance(url: str):
+    print(f"⚡ Processing: {url}")
     
-    # 1. Download Image
-    low_res_img = download_image(url)
-    
-    # 2. Resize if too small (Model needs decent input) or too big
-    # This model likes input around 128x128 or 256x256 to turn into 1024x1024
-    if low_res_img.width > 512 or low_res_img.height > 512:
-         low_res_img = low_res_img.resize((512, 512))
-
-    print("⚡ Starting VIP Enhancement...")
-
     try:
-        # 3. Get Model
-        pipe = get_upscaler_model()
+        # 1. Download Image
+        resp = requests.get(url, stream=True, timeout=20)
+        resp.raise_for_status()
+        
+        # 2. Convert to CV2 format
+        image = np.asarray(bytearray(resp.content), dtype="uint8")
+        img = cv2.imdecode(image, cv2.IMREAD_COLOR)
 
-        # 4. Generate High Res Image
-        # num_inference_steps=20 is good for speed/quality balance on CPU
-        result = pipe(
-            prompt=prompt,
-            image=low_res_img,
-            num_inference_steps=20,  
-            guidance_scale=7.5
-        ).images[0]
+        if img is None:
+            return {"error": "Could not decode image"}
+
+        # 3. Get Model
+        restorer = load_models()
+
+        # 4. RUN ENHANCEMENT (The Remini Step)
+        # has_aligned=False means it will detect faces automatically
+        # only_center_face=False means it will fix ALL faces
+        # paste_back=True means it puts the fixed face back on the body
+        _, _, output = restorer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
+
+        # 5. Convert back to JPEG
+        _, encoded_img = cv2.imencode('.jpg', output, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        
+        # 6. Memory Cleanup
+        gc.collect()
+
+        return StreamingResponse(io.BytesIO(encoded_img.tobytes()), media_type="image/jpeg")
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"❌ Error: {e}")
         return {"error": str(e)}
-
-    # 5. Return Image
-    buf = io.BytesIO()
-    result.save(buf, format="JPEG", quality=95)
-    buf.seek(0)
-    
-    # Clean up RAM slightly (optional)
-    gc.collect()
-
-    return StreamingResponse(buf, media_type="image/jpeg")
 
 @app.get("/")
 def home():
-    return {"status": "VIP Enhancer Online", "ram": "Ready for Heavy Load"}
-
+    return {"status": "Remini-Style Enhancer Online"}
