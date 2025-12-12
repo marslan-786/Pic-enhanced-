@@ -8,48 +8,36 @@ import io
 app = Flask(__name__)
 
 def apply_ultimate_pro_enhancement(image_bytes):
-    # --- STAGE 1: Reading Image ---
+    import cv2, io, numpy as np
+
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None: return None
 
-    # --- STAGE 2: STRONG PROFESSIONAL HDR (The Dramatic Look) ---
-    # Using LAB color space to adjust lightness dramatically without messing up colors
+    # --- STAGE 1: Mild HDR LAB ---
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    
-    # clipLimit set high (3.5) for a very strong, dramatic HDR contrast effect
-    clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
     cl = clahe.apply(l)
-    
-    limg = cv2.merge((cl, a, b))
-    hdr_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    hdr_img = cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
 
-    # --- STAGE 3: MAXIMUM VIBRANCY & BRIGHTNESS (The "Pop" & "Glow") ---
+    # --- STAGE 2: Vibrancy but safe ---
     hsv = cv2.cvtColor(hdr_img, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    
-    # Significantly boost Saturation (+25) for deep, rich colors (orange top, ball)
-    s = cv2.add(s, 25) 
-    # significantly boost Value/Brightness (+35) for bright, glowing white skin look
-    v = cv2.add(v, 35)
-    
-    final_hsv = cv2.merge((h, s, v))
-    vibrant_img = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)
 
-    # --- STAGE 4: AGGRESSIVE PRO SHARPENING (The "Crispy" Details) ---
-    # Using a strong Unsharp Mask technique to make details pop out
-    gaussian_blur = cv2.GaussianBlur(vibrant_img, (0, 0), 3.0)
-    # Higher weight (1.5) on the original image vs blur creates stronger sharpness
-    sharp_img = cv2.addWeighted(vibrant_img, 1.5, gaussian_blur, -0.5, 0)
+    s = cv2.add(s, 12)   # +12 only (natural vibrancy)
+    v = cv2.add(v, 15)   # +15 brightness
 
-    # --- STAGE 5: FINAL POLISH (Porcelain Skin Finish) ---
-    # Apply moderate denoising to ensure the skin looks smooth like porcelain, 
-    # countering any grain introduced by the strong sharpening.
-    final_output = cv2.fastNlMeansDenoisingColored(sharp_img, None, 6, 6, 7, 21)
+    vibrant_img = cv2.cvtColor(cv2.merge((h, s, v)), cv2.COLOR_HSV2BGR)
 
-    # Encoding with maximum JPEG quality
-    _, encoded_img = cv2.imencode('.jpg', final_output, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
+    # --- STAGE 3: Professional Crisp Sharpness ---
+    blur = cv2.GaussianBlur(vibrant_img, (0, 0), 1.0)
+    sharp_img = cv2.addWeighted(vibrant_img, 1.25, blur, -0.25, 0)
+
+    # --- STAGE 4: LIGHT smoothing (not blur!!) ---
+    final_output = cv2.bilateralFilter(sharp_img, 6, 50, 50)
+
+    _, encoded_img = cv2.imencode(".jpg", final_output, [int(cv2.IMWRITE_JPEG_QUALITY), 98])
     return io.BytesIO(encoded_img.tobytes())
 
 # ================= API ROUTES (Standard GET/POST) =================
