@@ -2,8 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 import requests
 import io
-from PIL import Image
-import cv2
+from PIL import Image, ImageFilter
 import numpy as np
 from diffusers import StableDiffusionImg2ImgPipeline
 from realesrgan import RealESRGAN
@@ -12,92 +11,94 @@ import torch
 
 app = FastAPI()
 
+
 # --------------------------------------------
-# MODE A: GFPGAN + Real ESRGAN (HDR + Face Enhance)
+# MODE A: GFPGAN + ESRGAN
 # --------------------------------------------
 print("Loading Mode A models...")
+
 gfpgan = GFPGANer(
     model_path="https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth",
     upscale=2
 )
 
-# Real ESRGAN for Super Resolution
 def esrgan_upscale(img):
     model = RealESRGAN(torch.device("cpu"), scale=4)
     model.load_weights('https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.0/RealESRGAN_x4plus.pth')
     return model.predict(img)
 
+
 # --------------------------------------------
-# MODE B: Stable Diffusion Img2Img (Cartoon / Anime)
+# MODE B: Stable Diffusion Img2Img
 # --------------------------------------------
 print("Loading Mode B SD pipeline...")
+
 pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
     "runwayml/stable-diffusion-v1-5",
     torch_dtype=torch.float32
 )
 pipe = pipe.to("cpu")
 
+
 # --------------------------------------------
-# MODE C: OpenCV Sharpen + Noise Reduce + ESRGAN
+# MODE C: SHARPEN + DENOISE + ESRGAN (WITHOUT CV2)
 # --------------------------------------------
-def mode_c_process(image):
-    img = np.array(image)
+def mode_c_process(image: Image.Image):
+    
+    # Sharpen
+    sharp = image.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
 
-    # Sharpen Filter
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5,-1],
-                       [0, -1, 0]])
-    sharp = cv2.filter2D(img, -1, kernel)
+    # Light denoise (Pillow)
+    denoise = sharp.filter(ImageFilter.SMOOTH_MORE)
 
-    # Denoise
-    denoise = cv2.fastNlMeansDenoisingColored(sharp, None, 10, 10, 7, 21)
-
-    # Upscale using ESRGAN
-    upscaled = esrgan_upscale(Image.fromarray(denoise))
+    # Convert to ESRGAN
+    upscaled = esrgan_upscale(denoise)
 
     return upscaled
 
 
 # --------------------------------------------
-# Download Image Helper
+# Download Helper
 # --------------------------------------------
 def download_image(url):
     try:
-        raw = requests.get(url, timeout=10).content
-        return Image.open(io.BytesIO(raw)).convert("RGB")
+        content = requests.get(url, timeout=10).content
+        return Image.open(io.BytesIO(content)).convert("RGB")
     except:
-        raise HTTPException(400, "Invalid Image URL")
+        raise HTTPException(400, "Invalid image URL")
 
 
 # --------------------------------------------
-# API Endpoint
+# MAIN API
 # --------------------------------------------
 @app.get("/enhance")
 def enhance(type: str, url: str):
+
     image = download_image(url)
 
-    # MODE SELECTION
-    if type.upper() == "A":
-        print("Running Mode A...")
-        _, _, output = gfpgan.enhance(np.array(image), has_aligned=False)
-        output = Image.fromarray(output)
-        output = esrgan_upscale(output)
+    type = type.upper()
 
-    elif type.upper() == "B":
+    if type == "A":
+        print("Running Mode A...")
+        _, _, restored = gfpgan.enhance(np.array(image), has_aligned=False)
+        restored = Image.fromarray(restored)
+        output = esrgan_upscale(restored)
+
+    elif type == "B":
         print("Running Mode B...")
         output = pipe(
-            prompt="high quality anime style face, ultra detailed, clear skin",
+            prompt="ultra detailed anime style, clear face, HQ",
             image=image,
             strength=0.65,
-            guidance_scale=7.5
+            guidance_scale=7.0
         ).images[0]
 
-    elif type.upper() == "C":
+    elif type == "C":
         print("Running Mode C...")
         output = mode_c_process(image)
 
     else:
-        raise HTTPException(400, "Invalid type (use A, B, or C)")
+        raise HTTPException(400, "Type must be A, B, or C")
 
     # Return image
     buf = io.BytesIO()
@@ -109,4 +110,4 @@ def enhance(type: str, url: str):
 
 @app.get("/")
 def home():
-    return {"status": "Three Mode Enhancer Active (A,B,C)"}
+    return {"status": "Enhancer Active: A / B / C"}
