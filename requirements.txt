@@ -1,9 +1,14 @@
-Flask>=2.0
-numpy>=1.24
-opencv-python-headless>=4.7
-Pillow>=10.0
-torch>=2.0.0
-torchvision>=0.15.0
-gfpgan>=2.1.0    # If pip package exists; بعض حالات میں github repo clone کی ضرورت
-realesrgan>=0.3.0 # pip package; ورنہ استعمال کرو realesrgan from GitHub
-requests>=2.28
+fastapi
+uvicorn
+requests
+pillow
+opencv-python
+numpy
+torch
+torchvision
+gfpgan
+realesrgan
+diffusers
+transformers
+accelerate
+scipy
