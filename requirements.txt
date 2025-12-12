@@ -3,9 +3,10 @@ uvicorn
 python-multipart
 requests
 Pillow
+numpy<2.0.0
+setuptools<70.0.0
+basicsr @ git+https://github.com/XPixelGroup/BasicSR.git@master
+gfpgan
+realesrgan
+opencv-python-headless
 torch --index-url https://download.pytorch.org/whl/cpu
-diffusers
-transformers
-accelerate
-scipy
-safetensors
