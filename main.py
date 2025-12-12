@@ -2,105 +2,93 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 import requests
 import io
-from PIL import Image, ImageFilter
-import numpy as np
+from PIL import Image
 import torch
 import gc
 
 app = FastAPI()
 
-# Global variables (Models abhi load nahi honge)
-gfpgan_model = None
-sd_pipe = None
+# Global Variable for the Heavy Model
+upscaler_pipe = None
 
-# --- MODELS KO FUNCTION KE ANDAR LOAD KAREN ---
-
-def get_gfpgan():
-    global gfpgan_model
-    # Import yahan karen takay shuru mein time na lagay
-    from gfpgan import GFPGANer
-    if gfpgan_model is None:
-        print("Loading GFPGAN Model for the first time...")
-        gfpgan_model = GFPGANer(
-            model_path="https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth",
-            upscale=2,
-            arch='clean',
-            channel_multiplier=2
-        )
-    return gfpgan_model
-
-def get_sd_pipe():
-    global sd_pipe
-    from diffusers import StableDiffusionImg2ImgPipeline
-    if sd_pipe is None:
-        print("Loading Stable Diffusion (Heavy)...")
-        # CPU use kar rahe hain to float32 theek hai
-        sd_pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5",
+# --------------------------------------------
+# LAZY LOAD: Stable Diffusion x4 Upscaler
+# --------------------------------------------
+def get_upscaler_model():
+    global upscaler_pipe
+    # Import inside function to avoid startup timeout
+    from diffusers import StableDiffusionUpscalePipeline
+    
+    if upscaler_pipe is None:
+        print("🚀 Loading Heavy Stable Diffusion Upscaler (VIP Mode)...")
+        
+        # Load the model directly to CPU (since we have 32GB RAM + 32 vCPU)
+        upscaler_pipe = StableDiffusionUpscalePipeline.from_pretrained(
+            "stabilityai/stable-diffusion-x4-upscaler", 
             torch_dtype=torch.float32
         )
-        sd_pipe = sd_pipe.to("cpu")
-        sd_pipe.enable_attention_slicing() # Memory optimize
-    return sd_pipe
+        upscaler_pipe = upscaler_pipe.to("cpu")
+        
+        # Memory Optimization (Optional since you have 32GB)
+        # upscaler_pipe.enable_attention_slicing()
+        
+    return upscaler_pipe
 
-def esrgan_process(img):
-    from realesrgan import RealESRGAN
-    device = torch.device('cpu')
-    model = RealESRGAN(device, scale=4)
-    model.load_weights('https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.0/RealESRGAN_x4plus.pth')
-    return model.predict(img)
-
-# --- API ROUTES ---
-
-@app.get("/enhance")
-def enhance(type: str, url: str):
-    # Image download
+# --------------------------------------------
+# DOWNLOAD HELPER
+# --------------------------------------------
+def download_image(url):
     try:
         content = requests.get(url, timeout=10).content
         image = Image.open(io.BytesIO(content)).convert("RGB")
+        return image
     except:
-        raise HTTPException(400, "Invalid Image URL")
+        raise HTTPException(400, "Invalid image URL")
 
-    type = type.upper()
-    output = None
+# --------------------------------------------
+# MAIN API
+# --------------------------------------------
+@app.get("/enhance")
+def enhance(url: str, prompt: str = "high quality, 8k, ultra realistic, sharp focus"):
+    
+    # 1. Download Image
+    low_res_img = download_image(url)
+    
+    # 2. Resize if too small (Model needs decent input) or too big
+    # This model likes input around 128x128 or 256x256 to turn into 1024x1024
+    if low_res_img.width > 512 or low_res_img.height > 512:
+         low_res_img = low_res_img.resize((512, 512))
 
-    if type == "A":
-        # GFPGAN
-        model = get_gfpgan()
-        _, _, restored = model.enhance(np.array(image), has_aligned=False)
-        restored_pil = Image.fromarray(restored)
-        output = esrgan_process(restored_pil)
+    print("⚡ Starting VIP Enhancement...")
 
-    elif type == "B":
-        # Stable Diffusion
-        pipe = get_sd_pipe()
-        # Steps kam kiye hain speed ke liye
-        output = pipe(
-            prompt="high quality, detailed", 
-            image=image, 
-            strength=0.75, 
-            guidance_scale=7.5,
-            num_inference_steps=15
+    try:
+        # 3. Get Model
+        pipe = get_upscaler_model()
+
+        # 4. Generate High Res Image
+        # num_inference_steps=20 is good for speed/quality balance on CPU
+        result = pipe(
+            prompt=prompt,
+            image=low_res_img,
+            num_inference_steps=20,  
+            guidance_scale=7.5
         ).images[0]
 
-    elif type == "C":
-        # Simple Sharpen + ESRGAN
-        sharp = image.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
-        output = esrgan_process(sharp)
-    
-    else:
-        raise HTTPException(400, "Type must be A, B, or C")
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"error": str(e)}
 
-    # Return Image
+    # 5. Return Image
     buf = io.BytesIO()
-    output.save(buf, format="JPEG")
+    result.save(buf, format="JPEG", quality=95)
     buf.seek(0)
     
-    # Optional: Memory cleanup after heavy request
+    # Clean up RAM slightly (optional)
     gc.collect()
 
     return StreamingResponse(buf, media_type="image/jpeg")
 
 @app.get("/")
 def home():
-    return {"status": "Online", "message": "Models will load on first request"}
+    return {"status": "VIP Enhancer Online", "ram": "Ready for Heavy Load"}
+
