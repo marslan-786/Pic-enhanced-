@@ -1,4 +1,5 @@
 import cv2
+import os  
 import numpy as np
 import requests
 from flask import Flask, request, jsonify, send_file
@@ -98,6 +99,14 @@ def enhance_api():
     else:
         return jsonify({"error": "Image data nahi mila"}), 400
 
+# <--- Ye line sab se oopar imports ke sath likh den
+
+# ... baqi sara code waisa hi rahe ga ...
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Railway ka port uthao, agar na mile to 5000 use karo
+    port = int(os.environ.get("PORT", 5000))
+    # debug=False kar dein production ke liye
+    app.run(debug=False, host='0.0.0.0', port=port)
+
     
