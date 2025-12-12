@@ -2,7 +2,6 @@ fastapi
 uvicorn
 requests
 pillow
-opencv-python
 numpy
 torch
 torchvision
